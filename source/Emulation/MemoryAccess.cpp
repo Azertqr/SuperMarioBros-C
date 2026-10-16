@@ -1,212 +1,154 @@
+#include "../SMB/SMBEngine.hpp"
+
 #include "MemoryAccess.hpp"
 
-MemoryAccess::MemoryAccess()
+MemoryAccess::MemoryAccess(SMBEngine& engine, uint8_t* value) :
+    engine(engine)
 {
-    this->type = None;
-    this->constantValue = 0;
-    this->value = nullptr;
+    this->value = value;
 }
 
-MemoryAccess::MemoryAccess(uint8_t constant)
+MemoryAccess::MemoryAccess(SMBEngine& engine, uint8_t constant) :
+    engine(engine)
 {
-    this->type = Constant;
-    this->constantValue = constant;
-    // Fix: Pointer points to the member variable, not the stack parameter!
-    this->value = &this->constantValue;
+    this->constant = constant;
+    this->value = &this->constant; // FIX: pointer to the MEMBER, not the (dead) ctor parameter
 }
 
-MemoryAccess::MemoryAccess(uint8_t* pointer)
+MemoryAccess::MemoryAccess(const MemoryAccess& other) :
+    engine(other.engine),
+    value(other.value),
+    constant(other.constant)
 {
-    this->type = pointer != nullptr ? Read : None;
-    this->constantValue = 0;
-    this->value = pointer;
-}
-
-MemoryAccess::MemoryAccess(std::function<uint8_t()> readCallback)
-{
-    this->type = Read;
-    this->constantValue = 0;
-    this->value = nullptr;
-    this->readCallback = readCallback;
-}
-
-MemoryAccess::MemoryAccess(std::function<uint8_t()> readCallback, std::function<void(uint8_t)> writeCallback)
-{
-    this->type = Write;
-    this->constantValue = 0;
-    this->value = nullptr;
-    this->readCallback = readCallback;
-    this->writeCallback = writeCallback;
-}
-
-MemoryAccess::MemoryAccess(const MemoryAccess& other)
-{
-    this->type = other.type;
-    this->constantValue = other.constantValue;
-    if (this->type == Constant)
+    // If 'other' points at its own embedded constant, re-point at OUR copy
+    if (other.value == &other.constant)
     {
-        this->value = &this->constantValue;
+        value = &constant;
     }
-    else
-    {
-        this->value = other.value;
-    }
-    this->readCallback = other.readCallback;
-    this->writeCallback = other.writeCallback;
 }
 
-MemoryAccess& MemoryAccess::operator=(const MemoryAccess& other)
+MemoryAccess& MemoryAccess::operator = (uint8_t value)
 {
-    if (this != &other)
+    *(this->value) = value;
+    engine.setZN(value);
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator = (const MemoryAccess& rhs)
+{
+    return ((*this) = *(rhs.value));
+}
+
+MemoryAccess& MemoryAccess::operator += (uint8_t value)
+{
+    uint16_t temp = *(this->value) + value + (engine.c ? 1 : 0);
+    *(this->value) = temp & 0xff;
+    engine.setZN(*(this->value));
+    engine.c = temp > 0xff;
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator -= (uint8_t value)
+{
+    uint16_t temp = *(this->value) - value - (engine.c ? 0 : 1);
+    *(this->value) = (temp & 0xff);
+    engine.setZN(*(this->value));
+    engine.c = temp < 0x100;
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator ++ ()
+{
+    *(this->value) = *(this->value) + 1;
+    engine.setZN(*(this->value));
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator -- ()
+{
+    *(this->value) = *(this->value) - 1;
+    engine.setZN(*(this->value));
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator ++ (int unused)
+{
+    return ++(*this);
+}
+
+MemoryAccess& MemoryAccess::operator -- (int unused)
+{
+    return --(*this);
+}
+
+MemoryAccess& MemoryAccess::operator &= (uint8_t value)
+{
+    *(this->value) &= value;
+    engine.setZN(*(this->value));
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator |= (uint8_t value)
+{
+    *(this->value) |= value;
+    engine.setZN(*(this->value));
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator ^= (uint8_t value)
+{
+    *(this->value) ^= value;
+    engine.setZN(*(this->value));
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator <<= (int shift)
+{
+    for (int i = 0; i < shift; i++)
     {
-        this->type = other.type;
-        this->constantValue = other.constantValue;
-        if (this->type == Constant)
-        {
-            this->value = &this->constantValue;
-        }
-        else
-        {
-            this->value = other.value;
-        }
-        this->readCallback = other.readCallback;
-        this->writeCallback = other.writeCallback;
+        engine.c = *(this->value) & (1 << 7);
+        *(this->value) = (*(this->value) << 1) & 0xfe;
+        engine.setZN(*(this->value));
+    }
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator >>= (int shift)
+{
+    for (int i = 0; i < shift; i++)
+    {
+        engine.c = *(this->value) & (1 << 0);
+        *(this->value) = (*(this->value) >> 1) & 0x7f;
+        engine.setZN(*(this->value));
     }
     return *this;
 }
 
 MemoryAccess::operator uint8_t()
 {
-    return read();
+    return *value;
 }
 
-MemoryAccess& MemoryAccess::operator=(uint8_t value)
+void MemoryAccess::rol()
 {
-    write(value);
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator++()
-{
-    write(read() + 1);
-    return *this;
-}
-
-MemoryAccess MemoryAccess::operator++(int)
-{
-    MemoryAccess result = *this;
-    write(read() + 1);
-    return result;
-}
-
-MemoryAccess& MemoryAccess::operator--()
-{
-    write(read() - 1);
-    return *this;
-}
-
-MemoryAccess MemoryAccess::operator--(int)
-{
-    MemoryAccess result = *this;
-    write(read() - 1);
-    return result;
-}
-
-MemoryAccess& MemoryAccess::operator+=(uint8_t value)
-{
-    write(read() + value);
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator-=(uint8_t value)
-{
-    write(read() - value);
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator|=(uint8_t value)
-{
-    write(read() | value);
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator&=(uint8_t value)
-{
-    write(read() & value);
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator^=(uint8_t value)
-{
-    write(read() ^ value);
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator<<=(uint8_t value)
-{
-    write(read() << value);
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator>>=(uint8_t value)
-{
-    write(read() >> value);
-    return *this;
-}
-
-uint8_t MemoryAccess::read()
-{
-    if (type == Constant || (type == Read && value != nullptr))
+    bool bit7 = *(this->value) & (1 << 7);
+    *(this->value) <<= 1;
+    if( engine.c )
     {
-        return *value;
+        *(this->value) |= (1 << 0);
     }
-    else if (readCallback != nullptr)
+    engine.c = bit7;
+    engine.setZN(*(this->value));
+}
+
+void MemoryAccess::ror()
+{
+    bool bit0 = *(this->value) & (1 << 0);
+    *(this->value) >>= 1;
+    if( engine.c )
     {
-        return readCallback();
+        *(this->value) |= (1 << 7);
     }
-    return 0;
-}
-
-void MemoryAccess::write(uint8_t value)
-{
-    if (this->value != nullptr)
-    {
-        *this->value = value;
-    }
-    else if (writeCallback != nullptr)
-    {
-        writeCallback(value);
-    }
-}
-
-uint8_t MemoryAccess::asl()
-{
-    uint8_t val = read();
-    uint8_t result = val << 1;
-    write(result);
-    return (val & 0x80) >> 7;
-}
-
-uint8_t MemoryAccess::lsr()
-{
-    uint8_t val = read();
-    uint8_t result = val >> 1;
-    write(result);
-    return val & 0x01;
-}
-
-uint8_t MemoryAccess::rol(bool carry)
-{
-    uint8_t val = read();
-    uint8_t result = (val << 1) | (carry ? 1 : 0);
-    write(result);
-    return (val & 0x80) >> 7;
-}
-
-uint8_t MemoryAccess::ror(bool carry)
-{
-    uint8_t val = read();
-    uint8_t result = (val >> 1) | (carry ? 0x80 : 0);
-    write(result);
-    return val & 0x01;
+    engine.c = bit0;
+    engine.setZN(*(this->value));
 }
