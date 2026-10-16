@@ -38,7 +38,7 @@ jobs:
       - name: Compile C++ to WebAssembly (smbc.js + smbc.wasm)
         run: |
           mkdir -p web
-          em++ -O3 -std=c++14 -Isource \
+          em++ -O3 -std=c++14 -Wno-c++11-narrowing -Wno-narrowing -Isource \
             source/Configuration.cpp \
             source/Main.cpp \
             source/Emulation/APU.cpp \
