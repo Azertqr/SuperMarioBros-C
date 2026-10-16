@@ -2,10 +2,16 @@
 #define MEMORYACCESS_HPP
 
 #include <cstdint>
+#include <functional>
 
-class MemoryAccess {
+/**
+ * Encapsulates read/write access to a memory location or register.
+ */
+class MemoryAccess
+{
 public:
-    enum Type {
+    enum Type
+    {
         None,
         Read,
         Write,
@@ -13,21 +19,29 @@ public:
     };
 
     MemoryAccess();
+    MemoryAccess(uint8_t constant);
+    MemoryAccess(uint8_t* pointer);
+    MemoryAccess(std::function<uint8_t()> readCallback);
+    MemoryAccess(std::function<uint8_t()> readCallback, std::function<void(uint8_t)> writeCallback);
     MemoryAccess(const MemoryAccess& other);
     MemoryAccess& operator=(const MemoryAccess& other);
 
-    static MemoryAccess createConstant(uint8_t constant);
-    static MemoryAccess createRead(uint8_t* ptr);
-    static MemoryAccess createWrite(uint8_t* ptr);
+    operator uint8_t();
+    MemoryAccess& operator=(uint8_t value);
+    MemoryAccess& operator++();
+    MemoryAccess operator++(int);
+    MemoryAccess& operator--();
+    MemoryAccess operator--(int);
 
-    uint8_t read() const;
-    void write(uint8_t val);
-    Type getType() const { return type; }
+    uint8_t read();
+    void write(uint8_t value);
 
 private:
     Type type;
-    uint8_t* pointer;
-    uint8_t constValue;
+    uint8_t constantValue;
+    uint8_t* value;
+    std::function<uint8_t()> readCallback;
+    std::function<void(uint8_t)> writeCallback;
 };
 
 #endif // MEMORYACCESS_HPP
