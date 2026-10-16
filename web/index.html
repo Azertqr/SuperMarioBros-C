@@ -169,7 +169,7 @@
       left: 50%;
       transform: translate(-50%, -50%);
       pointer-events: none;
-      transition: transform 0.04s linear;
+      transition: none;
     }
     .stick-dir {
       position: absolute;
@@ -489,11 +489,16 @@
 
       stickNub.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
 
-      const deadzone = 16;
-      setBtn(BTN.LEFT,  dx < -deadzone);
-      setBtn(BTN.RIGHT, dx >  deadzone);
-      setBtn(BTN.UP,    dy < -deadzone);
-      setBtn(BTN.DOWN,  dy >  deadzone);
+      // Direction "dominante" : un petit écart vertical du pouce ne doit PAS
+      // appuyer sur BAS (sinon Mario s'accroupit et ne court plus).
+      const dead = 14;          // zone morte horizontale
+      const vDead = 30;         // il faut pousser franchement pour haut/bas
+      const ax = Math.abs(dx), ay = Math.abs(dy);
+      const vertical = ay > vDead && ay > ax * 1.2;   // vraiment vers le haut/bas
+      setBtn(BTN.LEFT,  !vertical && dx < -dead);
+      setBtn(BTN.RIGHT, !vertical && dx >  dead);
+      setBtn(BTN.UP,    vertical && dy < 0);
+      setBtn(BTN.DOWN,  vertical && dy > 0);
     }
 
     function resetStick() {
