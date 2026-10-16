@@ -1,0 +1,512 @@
+<!-- File: web/index.html -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Super Mario Bros. C — WebAssembly iPad</title>
+  <style>
+    :root {
+      --bg: #0b0c10;
+      --panel: #161822;
+      --accent: #e52521;
+      --gold: #fbd000;
+      --text: #f5f6fa;
+    }
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      touch-action: none;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* Top Bar / ROM Loader */
+    #top-bar {
+      width: 100%;
+      padding: max(8px, env(safe-area-inset-top)) 16px 8px;
+      background: var(--panel);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border-bottom: 2px solid #26293a;
+      z-index: 20;
+    }
+    .brand {
+      font-weight: 800;
+      font-size: 15px;
+      letter-spacing: 0.5px;
+      color: var(--gold);
+    }
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .btn-ui {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 7px 13px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .btn-ui.secondary {
+      background: #2b3044;
+    }
+    #rom-input {
+      display: none;
+    }
+
+    /* Viewport & Canvas */
+    #stage {
+      position: relative;
+      flex: 1;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    canvas#canvas {
+      height: 100%;
+      max-width: 100%;
+      aspect-ratio: 256 / 240;
+      object-fit: contain;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      background: #000;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+    }
+
+    /* ROM Drop Overlay */
+    #rom-overlay {
+      position: absolute;
+      inset: 16px;
+      background: rgba(22, 24, 34, 0.94);
+      border: 2px dashed var(--gold);
+      border-radius: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+      z-index: 15;
+    }
+    #rom-overlay.hidden {
+      display: none;
+    }
+    #rom-overlay h2 {
+      margin: 0 0 8px;
+      color: var(--gold);
+    }
+    #rom-overlay p {
+      margin: 6px 0 18px;
+      max-width: 440px;
+      font-size: 14px;
+      color: #b8becc;
+      line-height: 1.45;
+    }
+
+    /* Touch Controls Overlay (iPad / Mobile) */
+    #touch-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: 18px max(24px, env(safe-area-inset-right)) max(22px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+      z-index: 10;
+    }
+    .controls-row {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }
+
+    /* Virtual Joystick + D-Pad */
+    #stick-zone {
+      width: 165px;
+      height: 165px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      border: 2px solid rgba(255, 255, 255, 0.22);
+      position: relative;
+      pointer-events: auto;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+    #stick-nub {
+      width: 66px;
+      height: 66px;
+      border-radius: 50%;
+      background: rgba(251, 208, 0, 0.75);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      transition: transform 0.04s linear;
+    }
+    .stick-dir {
+      position: absolute;
+      font-size: 12px;
+      font-weight: 800;
+      color: rgba(255,255,255,0.45);
+      pointer-events: none;
+    }
+    .dir-u { top: 8px; left: 50%; transform: translateX(-50%); }
+    .dir-d { bottom: 8px; left: 50%; transform: translateX(-50%); }
+    .dir-l { left: 10px; top: 50%; transform: translateY(-50%); }
+    .dir-r { right: 10px; top: 50%; transform: translateY(-50%); }
+
+    /* Center Start / Select */
+    .meta-pads {
+      display: flex;
+      gap: 14px;
+      margin-bottom: 12px;
+      pointer-events: auto;
+    }
+    .pill-btn {
+      width: 72px;
+      height: 30px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.16);
+      border: 1.5px solid rgba(255, 255, 255, 0.3);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      letter-spacing: 1px;
+    }
+    .pill-btn.active {
+      background: var(--gold);
+      color: #000;
+    }
+
+    /* Action Buttons B & A */
+    .ab-cluster {
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      pointer-events: auto;
+    }
+    .action-btn {
+      width: 82px;
+      height: 82px;
+      border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.35);
+      color: #fff;
+      font-size: 26px;
+      font-weight: 900;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.55);
+    }
+    .action-btn span {
+      font-size: 10px;
+      font-weight: 700;
+      opacity: 0.8;
+    }
+    #btn-b {
+      background: rgba(229, 37, 33, 0.72);
+      transform: translateY(14px);
+    }
+    #btn-a {
+      background: rgba(0, 168, 89, 0.78);
+      transform: translateY(-10px);
+    }
+    .action-btn.active {
+      filter: brightness(1.35);
+      border-color: var(--gold);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="top-bar">
+    <div class="brand">SUPER MARIO BROS. C [WASM]</div>
+    <div class="top-actions">
+      <label class="btn-ui" for="rom-input">Charger ROM (.nes)</label>
+      <input type="file" id="rom-input" accept=".nes,application/octet-stream" />
+      <button class="btn-ui secondary" id="btn-reset" type="button">Reset</button>
+      <button class="btn-ui secondary" id="btn-toggle-touch" type="button">Touch UI</button>
+    </div>
+  </div>
+
+  <div id="stage">
+    <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+
+    <div id="rom-overlay">
+      <h2>ROM Super Mario Bros. (.nes) requise</h2>
+      <p>
+        Ce portage C++ recompile le code 6502 nativement en WebAssembly mais extrait les sprites (CHR-ROM) de la ROM originale.<br/>
+        <strong>Glisse ton fichier .nes ici</strong> ou touche le bouton ci-dessous depuis l'app Fichiers de ton iPad.
+      </p>
+      <label class="btn-ui" for="rom-input" style="font-size:15px; padding:12px 22px;">
+        Sélectionner Super Mario Bros.nes
+      </label>
+      <p id="status-msg" style="margin-top:14px; color:#fbd000; font-weight:700;">Initialisation du runtime WebAssembly...</p>
+    </div>
+
+    <div id="touch-layer">
+      <div class="controls-row">
+        <div id="stick-zone">
+          <span class="stick-dir dir-u">▲</span>
+          <span class="stick-dir dir-d">▼</span>
+          <span class="stick-dir dir-l">◀</span>
+          <span class="stick-dir dir-r">▶</span>
+          <div id="stick-nub"></div>
+        </div>
+
+        <div class="meta-pads">
+          <div class="pill-btn" data-btn="2">SELECT</div>
+          <div class="pill-btn" data-btn="3">START</div>
+        </div>
+
+        <div class="ab-cluster">
+          <div class="action-btn" id="btn-b" data-btn="1">B<span>RUN/FIRE</span></div>
+          <div class="action-btn" id="btn-a" data-btn="0">A<span>JUMP</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ControllerButton indices matching source/Emulation/Controller.hpp
+    const BTN = {
+      A: 0,
+      B: 1,
+      SELECT: 2,
+      START: 3,
+      UP: 4,
+      DOWN: 5,
+      LEFT: 6,
+      RIGHT: 7
+    };
+
+    let wasmReady = false;
+    const statusMsg = document.getElementById('status-msg');
+    const romOverlay = document.getElementById('rom-overlay');
+
+    function setBtn(id, pressed) {
+      if (!wasmReady || typeof Module._setTouchButton !== 'function') return;
+      Module._setTouchButton(id, pressed ? 1 : 0);
+    }
+
+    function unlockSafariAudio() {
+      if (Module && Module.SDL2 && Module.SDL2.audioContext) {
+        if (Module.SDL2.audioContext.state === 'suspended') {
+          Module.SDL2.audioContext.resume();
+        }
+      }
+    }
+
+    function bootRomBytes(uint8Array) {
+      if (!wasmReady) return;
+      // Validate iNES magic header "NES\x1A"
+      if (uint8Array.length < 16 || uint8Array[0] !== 0x4E || uint8Array[1] !== 0x45 || uint8Array[2] !== 0x53) {
+        statusMsg.textContent = "Erreur : Ce fichier n'est pas une ROM iNES (.nes) valide.";
+        return;
+      }
+      unlockSafariAudio();
+      Module.FS.writeFile('/smb.nes', uint8Array);
+      const ok = Module.ccall('startGameWithRom', 'number', ['string'], ['/smb.nes']);
+      if (ok === 1) {
+        romOverlay.classList.add('hidden');
+        try {
+          // Cache ROM in base64 inside localStorage for instant reload on iPad
+          let binary = '';
+          for (let i = 0; i < uint8Array.byteLength; i++) {
+            binary += String.fromCharCode(uint8Array[i]);
+          }
+          localStorage.setItem('smbc_cached_rom_b64', btoa(binary));
+        } catch (e) {}
+      } else {
+        statusMsg.textContent = "Échec du chargement de la ROM par SMBEngine.";
+      }
+    }
+
+    var Module = {
+      canvas: (function() { return document.getElementById('canvas'); })(),
+      onRuntimeInitialized: function() {
+        wasmReady = true;
+        statusMsg.textContent = "WASM prêt ! En attente de la ROM .nes...";
+        // Auto-load cached ROM if previously selected on this iPad
+        try {
+          const cached = localStorage.getItem('smbc_cached_rom_b64');
+          if (cached) {
+            const bin = atob(cached);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            bootRomBytes(bytes);
+          }
+        } catch (e) {}
+      }
+    };
+
+    // File input handler
+    document.getElementById('rom-input').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        bootRomBytes(new Uint8Array(evt.target.result));
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    // Drag & drop handler
+    window.addEventListener('dragover', function(e) { e.preventDefault(); });
+    window.addEventListener('drop', function(e) {
+      e.preventDefault();
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const file = e.dataTransfer.files[0];
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+          bootRomBytes(new Uint8Array(evt.target.result));
+        };
+        reader.readAsArrayBuffer(file);
+      }
+    });
+
+    // Reset & Toggle Touch UI
+    document.getElementById('btn-reset').addEventListener('click', function() {
+      if (wasmReady && Module._resetGame) Module._resetGame();
+    });
+    document.getElementById('btn-toggle-touch').addEventListener('click', function() {
+      const layer = document.getElementById('touch-layer');
+      layer.style.display = (layer.style.display === 'none') ? 'flex' : 'none';
+    });
+
+    // Multi-touch A / B / Start / Select buttons (supports sliding finger between B and A!)
+    const buttonElements = document.querySelectorAll('[data-btn]');
+    function updateActionTouches(touches) {
+      unlockSafariAudio();
+      const activeIds = new Set();
+      for (let i = 0; i < touches.length; i++) {
+        const t = touches[i];
+        const el = document.elementFromPoint(t.clientX, t.clientY);
+        if (el) {
+          const btnEl = el.closest('[data-btn]');
+          if (btnEl) {
+            activeIds.add(parseInt(btnEl.getAttribute('data-btn'), 10));
+          }
+        }
+      }
+      buttonElements.forEach(function(el) {
+        const id = parseInt(el.getAttribute('data-btn'), 10);
+        const isPressed = activeIds.has(id);
+        el.classList.toggle('active', isPressed);
+        setBtn(id, isPressed);
+      });
+    }
+
+    document.querySelectorAll('.ab-cluster, .meta-pads').forEach(function(container) {
+      container.addEventListener('touchstart', function(e) { e.preventDefault(); updateActionTouches(e.touches); }, { passive: false });
+      container.addEventListener('touchmove', function(e) { e.preventDefault(); updateActionTouches(e.touches); }, { passive: false });
+      container.addEventListener('touchend', function(e) { e.preventDefault(); updateActionTouches(e.touches); }, { passive: false });
+      container.addEventListener('touchcancel', function(e) { e.preventDefault(); updateActionTouches(e.touches); }, { passive: false });
+    });
+
+    // Virtual Analog Joystick / D-Pad on iPad
+    const stickZone = document.getElementById('stick-zone');
+    const stickNub = document.getElementById('stick-nub');
+    let stickTouchId = null;
+
+    function handleStickMove(clientX, clientY) {
+      const rect = stickZone.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const maxRadius = rect.width / 2 - 20;
+
+      let dx = clientX - cx;
+      let dy = clientY - cy;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist > maxRadius) {
+        dx = (dx / dist) * maxRadius;
+        dy = (dy / dist) * maxRadius;
+      }
+
+      stickNub.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+
+      const deadzone = 16;
+      setBtn(BTN.LEFT,  dx < -deadzone);
+      setBtn(BTN.RIGHT, dx >  deadzone);
+      setBtn(BTN.UP,    dy < -deadzone);
+      setBtn(BTN.DOWN,  dy >  deadzone);
+    }
+
+    function resetStick() {
+      stickTouchId = null;
+      stickNub.style.transform = 'translate(-50%, -50%)';
+      setBtn(BTN.LEFT, false);
+      setBtn(BTN.RIGHT, false);
+      setBtn(BTN.UP, false);
+      setBtn(BTN.DOWN, false);
+    }
+
+    stickZone.addEventListener('touchstart', function(e) {
+      e.preventDefault();
+      unlockSafariAudio();
+      const t = e.changedTouches[0];
+      stickTouchId = t.identifier;
+      handleStickMove(t.clientX, t.clientY);
+    }, { passive: false });
+
+    stickZone.addEventListener('touchmove', function(e) {
+      e.preventDefault();
+      for (let i = 0; i < e.touches.length; i++) {
+        if (e.touches[i].identifier === stickTouchId) {
+          handleStickMove(e.touches[i].clientX, e.touches[i].clientY);
+          break;
+        }
+      }
+    }, { passive: false });
+
+    stickZone.addEventListener('touchend', function(e) {
+      e.preventDefault();
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === stickTouchId) {
+          resetStick();
+          break;
+        }
+      }
+    }, { passive: false });
+
+    stickZone.addEventListener('touchcancel', function(e) {
+      e.preventDefault();
+      resetStick();
+    }, { passive: false });
+  </script>
+  <script async src="smbc.js"></script>
+</body>
+</html>
