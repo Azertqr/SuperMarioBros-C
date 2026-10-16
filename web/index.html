@@ -114,7 +114,7 @@
       z-index: 15;
     }
     #rom-overlay.hidden {
-      display: none;
+      display: none !important;
     }
     #rom-overlay h2 {
       margin: 0 0 8px;
@@ -300,7 +300,6 @@
   </div>
 
   <script>
-    // ControllerButton indices matching source/Emulation/Controller.hpp
     const BTN = {
       A: 0,
       B: 1,
@@ -313,6 +312,7 @@
     };
 
     let wasmReady = false;
+    let mainInitialized = false;
     const statusMsg = document.getElementById('status-msg');
     const romOverlay = document.getElementById('rom-overlay');
 
@@ -327,11 +327,17 @@
           Module.SDL2.audioContext.resume();
         }
       }
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx && !window._unlockedCtx) {
+        window._unlockedCtx = new AudioCtx();
+        if (window._unlockedCtx.state === 'suspended') {
+          window._unlockedCtx.resume();
+        }
+      }
     }
 
     function bootRomBytes(uint8Array) {
       if (!wasmReady) return;
-      // Validate iNES magic header "NES\x1A"
       if (uint8Array.length < 16 || uint8Array[0] !== 0x4E || uint8Array[1] !== 0x45 || uint8Array[2] !== 0x53) {
         statusMsg.textContent = "Erreur : Ce fichier n'est pas une ROM iNES (.nes) valide.";
         return;
@@ -342,7 +348,6 @@
       if (ok === 1) {
         romOverlay.classList.add('hidden');
         try {
-          // Cache ROM in base64 inside localStorage for instant reload on iPad
           let binary = '';
           for (let i = 0; i < uint8Array.byteLength; i++) {
             binary += String.fromCharCode(uint8Array[i]);
@@ -356,19 +361,28 @@
 
     var Module = {
       canvas: (function() { return document.getElementById('canvas'); })(),
+      print: function(text) { console.log(text); },
+      printErr: function(text) {
+        console.error(text);
+        if (statusMsg) statusMsg.textContent = "Erreur: " + text;
+      },
       onRuntimeInitialized: function() {
         wasmReady = true;
         statusMsg.textContent = "WASM prêt ! En attente de la ROM .nes...";
-        // Auto-load cached ROM if previously selected on this iPad
-        try {
-          const cached = localStorage.getItem('smbc_cached_rom_b64');
-          if (cached) {
-            const bin = atob(cached);
-            const bytes = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-            bootRomBytes(bytes);
-          }
-        } catch (e) {}
+
+        // Délai de sécurité : on attend que main() et SDL_Init aient fini de s'exécuter
+        setTimeout(function() {
+          mainInitialized = true;
+          try {
+            const cached = localStorage.getItem('smbc_cached_rom_b64');
+            if (cached) {
+              const bin = atob(cached);
+              const bytes = new Uint8Array(bin.length);
+              for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+              bootRomBytes(bytes);
+            }
+          } catch (e) {}
+        }, 150);
       }
     };
 
@@ -406,7 +420,7 @@
       layer.style.display = (layer.style.display === 'none') ? 'flex' : 'none';
     });
 
-    // Multi-touch A / B / Start / Select buttons (supports sliding finger between B and A!)
+    // Multi-touch A / B / Start / Select buttons
     const buttonElements = document.querySelectorAll('[data-btn]');
     function updateActionTouches(touches) {
       unlockSafariAudio();
@@ -436,7 +450,7 @@
       container.addEventListener('touchcancel', function(e) { e.preventDefault(); updateActionTouches(e.touches); }, { passive: false });
     });
 
-    // Virtual Analog Joystick / D-Pad on iPad
+    // Virtual Joystick / D-Pad
     const stickZone = document.getElementById('stick-zone');
     const stickNub = document.getElementById('stick-nub');
     let stickTouchId = null;
