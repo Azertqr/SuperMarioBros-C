@@ -2,58 +2,56 @@
 #define MEMORYACCESS_HPP
 
 #include <cstdint>
-#include <functional>
+
+class SMBEngine;
 
 /**
- * Encapsulates read/write access to a memory location or register.
+ * Wraps operations to memory values/registers so that status flags can be set for branch operations.
  */
 class MemoryAccess
 {
 public:
-    enum Type
-    {
-        None,
-        Read,
-        Write,
-        Constant
-    };
+    /**
+     * Construct a MemoryAccess to a location.
+     */
+    MemoryAccess(SMBEngine& engine, uint8_t* value);
 
-    MemoryAccess();
-    MemoryAccess(uint8_t constant);
-    MemoryAccess(uint8_t* pointer);
-    MemoryAccess(std::function<uint8_t()> readCallback);
-    MemoryAccess(std::function<uint8_t()> readCallback, std::function<void(uint8_t)> writeCallback);
+    /**
+     * Construct a MemoryAccess to a constant value.
+     */
+    MemoryAccess(SMBEngine& engine, uint8_t constant);
+
     MemoryAccess(const MemoryAccess& other);
-    MemoryAccess& operator=(const MemoryAccess& other);
 
+    MemoryAccess& operator = (uint8_t value);
+    MemoryAccess& operator = (const MemoryAccess& rhs);
+    MemoryAccess& operator += (uint8_t value);
+    MemoryAccess& operator -= (uint8_t value);
+    MemoryAccess& operator ++ ();
+    MemoryAccess& operator -- ();
+    MemoryAccess& operator ++ (int unused);
+    MemoryAccess& operator -- (int unused);
+    MemoryAccess& operator &= (uint8_t value);
+    MemoryAccess& operator |= (uint8_t value);
+    MemoryAccess& operator ^= (uint8_t value);
+    MemoryAccess& operator <<= (int shift);
+    MemoryAccess& operator >>= (int shift);
     operator uint8_t();
-    MemoryAccess& operator=(uint8_t value);
-    MemoryAccess& operator++();
-    MemoryAccess operator++(int);
-    MemoryAccess& operator--();
-    MemoryAccess operator--(int);
-    MemoryAccess& operator+=(uint8_t value);
-    MemoryAccess& operator-=(uint8_t value);
-    MemoryAccess& operator|=(uint8_t value);
-    MemoryAccess& operator&=(uint8_t value);
-    MemoryAccess& operator^=(uint8_t value);
-    MemoryAccess& operator<<=(uint8_t value);
-    MemoryAccess& operator>>=(uint8_t value);
 
-    uint8_t read();
-    void write(uint8_t value);
+    /**
+     * Circular left bit rotation.
+     */
+    void rol();
 
-    uint8_t asl();
-    uint8_t lsr();
-    uint8_t rol(bool carry = false);
-    uint8_t ror(bool carry = false);
+    /**
+     * Circular right bit rotation.
+     */
+    void ror();
 
 private:
-    Type type;
-    uint8_t constantValue;
+    SMBEngine& engine;
     uint8_t* value;
-    std::function<uint8_t()> readCallback;
-    std::function<void(uint8_t)> writeCallback;
+    uint8_t constant;
 };
 
 #endif // MEMORYACCESS_HPP
