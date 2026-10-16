@@ -514,19 +514,20 @@ uint8_t APU::getOutput()
 
 void APU::output(uint8_t* buffer, int len)
 {
-    len = (len > audioBufferLength) ? audioBufferLength : len;
-    memcpy(buffer, audioBuffer, len);
+    SDL_LockAudio();
     if (len > audioBufferLength)
     {
         memcpy(buffer, audioBuffer, audioBufferLength);
+        memset(buffer + audioBufferLength, 0, len - audioBufferLength);
         audioBufferLength = 0;
     }
     else
     {
         memcpy(buffer, audioBuffer, len);
         audioBufferLength -= len;
-        memcpy(audioBuffer, audioBuffer + len, audioBufferLength);
+        memmove(audioBuffer, audioBuffer + len, audioBufferLength);
     }
+    SDL_UnlockAudio();
 }
 
 void APU::stepFrame()
@@ -549,24 +550,21 @@ void APU::stepFrame()
             break;
         }
 
-        // Calculate the number of samples needed per 1/4 frame
-        //
         int frequency = Configuration::getAudioFrequency();
-
-        // Example: we need 735 samples per frame for 44.1KHz sound sampling
-        //
         int samplesToWrite = frequency / (Configuration::getFrameRate() * 4);
         if (i == 3)
         {
-            // Handle the remainder on the final tick of the frame counter
-            //
             samplesToWrite = (frequency / Configuration::getFrameRate()) - 3 * (frequency / (Configuration::getFrameRate() * 4));
         }
         
         SDL_LockAudio();
 
-        // Step the timer ~3729 times per quarter frame for most channels
-        //
+        // Sécurité anti-débordement Web / Safari : si le buffer dépasse 4096 octets, on reset
+        if (audioBufferLength + samplesToWrite >= 4096)
+        {
+            audioBufferLength = 0;
+        }
+
         int j = 0;
         for (int stepIndex = 0; stepIndex < 3729; stepIndex++)
         {
