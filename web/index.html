@@ -257,6 +257,7 @@
       <label class="btn-ui" for="rom-input">Charger ROM (.nes)</label>
       <input type="file" id="rom-input" accept=".nes,application/octet-stream" />
       <button class="btn-ui secondary" id="btn-reset" type="button">Reset</button>
+      <button class="btn-ui secondary" id="btn-sound" type="button">🔇 son</button>
       <button class="btn-ui secondary" id="btn-toggle-touch" type="button">Touch UI</button>
     </div>
   </div>
@@ -321,20 +322,36 @@
       Module._setTouchButton(id, pressed ? 1 : 0);
     }
 
-    function unlockSafariAudio() {
-      if (Module && Module.SDL2 && Module.SDL2.audioContext) {
-        if (Module.SDL2.audioContext.state === 'suspended') {
-          Module.SDL2.audioContext.resume();
-        }
-      }
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (AudioCtx && !window._unlockedCtx) {
-        window._unlockedCtx = new AudioCtx();
-        if (window._unlockedCtx.state === 'suspended') {
-          window._unlockedCtx.resume();
-        }
-      }
+    // ---- AUDIO (iOS/Safari) ----
+    // iOS only lets an AudioContext start from a *finished* gesture (touchend/click),
+    // NOT touchstart and NOT from async callbacks (FileReader). So we listen globally.
+    function getSdlCtx() {
+      return (window.Module && Module.SDL2 && Module.SDL2.audioContext) || null;
     }
+    function updateSoundBadge() {
+      const b = document.getElementById('btn-sound');
+      if (!b) return;
+      const ctx = getSdlCtx();
+      if (!ctx) { b.textContent = '🔇 pas d\'audio'; return; }
+      b.textContent = ctx.state === 'running' ? '🔊 son ON' : '🔇 touche pour le son';
+    }
+    function unlockSafariAudio() {
+      const ctx = getSdlCtx();
+      if (ctx && ctx.state !== 'running') {
+        try { ctx.resume(); } catch (e) {}
+        try { // silent blip inside the gesture = classic iOS unlock
+          const src = ctx.createBufferSource();
+          src.buffer = ctx.createBuffer(1, 1, 22050);
+          src.connect(ctx.destination);
+          src.start(0);
+        } catch (e) {}
+      }
+      updateSoundBadge();
+    }
+    ['touchend', 'pointerup', 'click', 'keydown'].forEach(function(ev) {
+      document.addEventListener(ev, unlockSafariAudio, { capture: true, passive: true });
+    });
+    setInterval(updateSoundBadge, 1000);
 
     function bootRomBytes(uint8Array) {
       if (!wasmReady) return;
