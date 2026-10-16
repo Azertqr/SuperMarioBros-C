@@ -32,9 +32,21 @@ public:
     MemoryAccess operator++(int);
     MemoryAccess& operator--();
     MemoryAccess operator--(int);
+    MemoryAccess& operator+=(uint8_t value);
+    MemoryAccess& operator-=(uint8_t value);
+    MemoryAccess& operator|=(uint8_t value);
+    MemoryAccess& operator&=(uint8_t value);
+    MemoryAccess& operator^=(uint8_t value);
+    MemoryAccess& operator<<=(uint8_t value);
+    MemoryAccess& operator>>=(uint8_t value);
 
     uint8_t read();
     void write(uint8_t value);
+
+    uint8_t asl();
+    uint8_t lsr();
+    uint8_t rol(bool carry = false);
+    uint8_t ror(bool carry = false);
 
 private:
     Type type;
