@@ -1,278 +1,240 @@
+// File: source/Main.cpp
 #include <cstdio>
-#include <iostream>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <vector>
 
 #include <SDL2/SDL.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <emscripten/html5.h>
+#endif
+
+#include "Configuration.hpp"
+#include "Constants.hpp"
 #include "Emulation/Controller.hpp"
 #include "SMB/SMBEngine.hpp"
 #include "Util/Video.hpp"
 
-#include "Configuration.hpp"
-#include "Constants.hpp"
+static SDL_Window* g_window = nullptr;
+static SDL_Renderer* g_renderer = nullptr;
+static SDL_Texture* g_texture = nullptr;
+static SMBEngine* g_smbEngine = nullptr;
+static uint32_t g_renderBuffer[RENDER_WIDTH * RENDER_HEIGHT];
+static bool g_romLoaded = false;
+static bool g_running = true;
 
-uint8_t* romImage;
-static SDL_Window* window;
-static SDL_Renderer* renderer;
-static SDL_Texture* texture;
-static SDL_Texture* scanlineTexture;
-static SMBEngine* smbEngine = nullptr;
-static uint32_t renderBuffer[RENDER_WIDTH * RENDER_HEIGHT];
+// Bitmask state for iPad touch controls (buttons 0..7 matching ControllerButton enum)
+static uint8_t g_touchMask = 0;
 
-/**
- * Load the Super Mario Bros. ROM image.
- */
-static bool loadRomImage()
-{
-    FILE* file = fopen(Configuration::getRomFileName().c_str(), "r");
-    if (file == NULL)
-    {
-        std::cout << "Failed to open the file \"" << Configuration::getRomFileName() << "\". Exiting.\n";
+static void AudioCallback(void* userdata, uint8_t* buffer, int len) {
+    if (!g_romLoaded || !g_smbEngine) {
+        std::memset(buffer, 0, len);
+        return;
+    }
+    g_smbEngine->audioCallback(buffer, len);
+}
+
+static bool loadRomIntoBuffer(const char* path, std::vector<uint8_t>& outRom) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        std::printf("[SMBC-WASM] Failed to open ROM at: %s\n", path);
         return false;
     }
-
-    // Find the size of the file
-    fseek(file, 0L, SEEK_END);
-    size_t fileSize = ftell(file);
-    fseek(file, 0L, SEEK_SET);
-
-    // Read the entire file into a buffer
-    romImage = new uint8_t[fileSize];
-    fread(romImage, sizeof(uint8_t), fileSize, file);
-    fclose(file);
-
+    std::streamsize size = file.tellg();
+    if (size < 16 + 32768 + 8192) {
+        std::printf("[SMBC-WASM] Invalid NES ROM size (%ld bytes)\n", static_cast<long>(size));
+        return false;
+    }
+    file.seekg(0, std::ios::beg);
+    outRom.resize(static_cast<size_t>(size));
+    if (!file.read(reinterpret_cast<char*>(outRom.data()), size)) {
+        return false;
+    }
     return true;
 }
 
-/**
- * SDL Audio callback function.
- */
-static void audioCallback(void* userdata, uint8_t* buffer, int len)
-{
-    if (smbEngine != nullptr)
-    {
-        smbEngine->audioCallback(buffer, len);
-    }
+static void updateInputs() {
+    if (!g_smbEngine) return;
+
+    Controller& ctrl1 = g_smbEngine->getController1();
+    const uint8_t* keys = SDL_GetKeyboardState(nullptr);
+
+    bool a      = keys[SDL_SCANCODE_X] || keys[SDL_SCANCODE_Z] || keys[SDL_SCANCODE_L] || (g_touchMask & (1 << BUTTON_A));
+    bool b      = keys[SDL_SCANCODE_C] || keys[SDL_SCANCODE_K] || keys[SDL_SCANCODE_LSHIFT] || (g_touchMask & (1 << BUTTON_B));
+    bool select = keys[SDL_SCANCODE_RSHIFT] || keys[SDL_SCANCODE_SPACE] || (g_touchMask & (1 << BUTTON_SELECT));
+    bool start  = keys[SDL_SCANCODE_RETURN] || (g_touchMask & (1 << BUTTON_START));
+    bool up     = keys[SDL_SCANCODE_UP] || keys[SDL_SCANCODE_W] || (g_touchMask & (1 << BUTTON_UP));
+    bool down   = keys[SDL_SCANCODE_DOWN] || keys[SDL_SCANCODE_S] || (g_touchMask & (1 << BUTTON_DOWN));
+    bool left   = keys[SDL_SCANCODE_LEFT] || keys[SDL_SCANCODE_A] || (g_touchMask & (1 << BUTTON_LEFT));
+    bool right  = keys[SDL_SCANCODE_RIGHT] || keys[SDL_SCANCODE_D] || (g_touchMask & (1 << BUTTON_RIGHT));
+
+    ctrl1.setButtonState(BUTTON_A, a);
+    ctrl1.setButtonState(BUTTON_B, b);
+    ctrl1.setButtonState(BUTTON_SELECT, select);
+    ctrl1.setButtonState(BUTTON_START, start);
+    ctrl1.setButtonState(BUTTON_UP, up);
+    ctrl1.setButtonState(BUTTON_DOWN, down);
+    ctrl1.setButtonState(BUTTON_LEFT, left);
+    ctrl1.setButtonState(BUTTON_RIGHT, right);
 }
 
-/**
- * Initialize libraries for use.
- */
-static bool initialize()
-{
-    // Load the configuration
-    //
-    Configuration::initialize(CONFIG_FILE_NAME);
-
-    // Load the SMB ROM image
-    if (!loadRomImage())
-    {
-        return false;
-    }
-
-    // Initialize SDL
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0)
-    {
-        std::cout << "SDL_Init() failed during initialize(): " << SDL_GetError() << std::endl;
-        return false;
-    }
-
-    // Create the window
-    window = SDL_CreateWindow(APP_TITLE,
-                              SDL_WINDOWPOS_UNDEFINED,
-                              SDL_WINDOWPOS_UNDEFINED,
-                              RENDER_WIDTH * Configuration::getRenderScale(),
-                              RENDER_HEIGHT * Configuration::getRenderScale(),
-                              0);
-    if (window == nullptr)
-    {
-        std::cout << "SDL_CreateWindow() failed during initialize(): " << SDL_GetError() << std::endl;
-        return false;
-    }
-
-    // Setup the renderer and texture buffer
-    renderer = SDL_CreateRenderer(window, -1, (Configuration::getVsyncEnabled() ? SDL_RENDERER_PRESENTVSYNC : 0) | SDL_RENDERER_ACCELERATED);
-    if (renderer == nullptr)
-    {
-        std::cout << "SDL_CreateRenderer() failed during initialize(): " << SDL_GetError() << std::endl;
-        return false;
-    }
-
-    if (SDL_RenderSetLogicalSize(renderer, RENDER_WIDTH, RENDER_HEIGHT) < 0)
-    {
-        std::cout << "SDL_RenderSetLogicalSize() failed during initialize(): " << SDL_GetError() << std::endl;
-        return false;
-    }
-
-    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, RENDER_WIDTH, RENDER_HEIGHT);
-    if (texture == nullptr)
-    {
-        std::cout << "SDL_CreateTexture() failed during initialize(): " << SDL_GetError() << std::endl;
-        return false;
-    }
-
-    if (Configuration::getScanlinesEnabled())
-    {
-        scanlineTexture = generateScanlineTexture(renderer);
-    }
-
-    // Set up custom palette, if configured
-    //
-    if (!Configuration::getPaletteFileName().empty())
-    {
-        const uint32_t* palette = loadPalette(Configuration::getPaletteFileName());
-        if (palette)
-        {
-            paletteRGB = palette;
+static void mainLoopTick() {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_QUIT) {
+            g_running = false;
         }
     }
 
-    if (Configuration::getAudioEnabled())
-    {
-        // Initialize audio
-        SDL_AudioSpec desiredSpec;
-        desiredSpec.freq = Configuration::getAudioFrequency();
-        desiredSpec.format = AUDIO_S8;
-        desiredSpec.channels = 1;
-        desiredSpec.samples = 2048;
-        desiredSpec.callback = audioCallback;
-        desiredSpec.userdata = NULL;
+    if (!g_romLoaded || !g_smbEngine) {
+        SDL_SetRenderDrawColor(g_renderer, 12, 12, 18, 255);
+        SDL_RenderClear(g_renderer);
+        SDL_RenderPresent(g_renderer);
+        return;
+    }
 
-        SDL_AudioSpec obtainedSpec;
-        SDL_OpenAudio(&desiredSpec, &obtainedSpec);
+    updateInputs();
+    g_smbEngine->update();
+    g_smbEngine->render(g_renderBuffer);
 
-        // Start playing audio
+    SDL_UpdateTexture(g_texture, nullptr, g_renderBuffer, sizeof(uint32_t) * RENDER_WIDTH);
+    SDL_RenderClear(g_renderer);
+    SDL_RenderCopy(g_renderer, g_texture, nullptr, nullptr);
+    SDL_RenderPresent(g_renderer);
+}
+
+extern "C" {
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+int startGameWithRom(const char* romPath) {
+    static std::vector<uint8_t> romData;
+    if (!loadRomIntoBuffer(romPath, romData)) {
+        return 0;
+    }
+
+    if (g_smbEngine) {
+        delete g_smbEngine;
+        g_smbEngine = nullptr;
+    }
+
+    g_smbEngine = new SMBEngine(romData.data());
+    g_smbEngine->reset();
+    g_romLoaded = true;
+
+    if (Configuration::getAudioEnabled()) {
         SDL_PauseAudio(0);
     }
 
-    return true;
+    std::printf("[SMBC-WASM] ROM loaded and SMBEngine started: %s\n", romPath);
+    return 1;
 }
 
-/**
- * Shutdown libraries for exit.
- */
-static void shutdown()
-{
-    SDL_CloseAudio();
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+void setTouchButton(int buttonId, int pressed) {
+    if (buttonId < 0 || buttonId > 7) return;
+    if (pressed) {
+        g_touchMask |= static_cast<uint8_t>(1 << buttonId);
+    } else {
+        g_touchMask &= static_cast<uint8_t>(~(1 << buttonId));
+    }
+}
 
-    SDL_DestroyTexture(scanlineTexture);
-    SDL_DestroyTexture(texture);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+void resetGame() {
+    if (g_smbEngine && g_romLoaded) {
+        g_smbEngine->reset();
+    }
+}
 
+} // extern "C"
+
+int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+
+    Configuration::initialize(CONFIG_FILE_NAME);
+
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
+        std::printf("SDL_Init failed: %s\n", SDL_GetError());
+        return 1;
+    }
+
+    int windowWidth = RENDER_WIDTH * Configuration::getRenderScale();
+    int windowHeight = RENDER_HEIGHT * Configuration::getRenderScale();
+
+    g_window = SDL_CreateWindow(
+        "Super Mario Bros. C (WASM)",
+        SDL_WINDOWPOS_UNDEFINED,
+        SDL_WINDOWPOS_UNDEFINED,
+        windowWidth,
+        windowHeight,
+        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
+    );
+
+    g_renderer = SDL_CreateRenderer(
+        g_window,
+        -1,
+        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC
+    );
+
+    SDL_RenderSetLogicalSize(g_renderer, RENDER_WIDTH, RENDER_HEIGHT);
+
+    g_texture = SDL_CreateTexture(
+        g_renderer,
+        SDL_PIXELFORMAT_ARGB8888,
+        SDL_TEXTUREACCESS_STREAMING,
+        RENDER_WIDTH,
+        RENDER_HEIGHT
+    );
+
+    if (Configuration::getAudioEnabled()) {
+        SDL_AudioSpec desiredSpec;
+        SDL_zero(desiredSpec);
+        desiredSpec.freq = Configuration::getAudioFrequency();
+        desiredSpec.format = AUDIO_U8;
+        desiredSpec.channels = 1;
+        desiredSpec.samples = 2048;
+        desiredSpec.callback = AudioCallback;
+        desiredSpec.userdata = nullptr;
+
+        if (SDL_OpenAudio(&desiredSpec, nullptr) < 0) {
+            std::printf("SDL_OpenAudio warning: %s\n", SDL_GetError());
+        }
+    }
+
+#ifdef __EMSCRIPTEN__
+    // On WebAssembly, wait for the user to drop/select the .nes ROM via HTML UI
+    emscripten_set_main_loop(mainLoopTick, 0, 1);
+#else
+    startGameWithRom(Configuration::getRomFileName().c_str());
+    const uint32_t frameDelay = 1000 / Configuration::getFrameRate();
+    while (g_running) {
+        uint32_t startTicks = SDL_GetTicks();
+        mainLoopTick();
+        uint32_t elapsed = SDL_GetTicks() - startTicks;
+        if (elapsed < frameDelay) {
+            SDL_Delay(frameDelay - elapsed);
+        }
+    }
+#endif
+
+    if (Configuration::getAudioEnabled()) {
+        SDL_CloseAudio();
+    }
+    delete g_smbEngine;
+    SDL_DestroyTexture(g_texture);
+    SDL_DestroyRenderer(g_renderer);
+    SDL_DestroyWindow(g_window);
     SDL_Quit();
-}
-
-static void mainLoop()
-{
-    SMBEngine engine(romImage);
-    smbEngine = &engine;
-    engine.reset();
-
-    bool running = true;
-    int progStartTime = SDL_GetTicks();
-    int frame = 0;
-    while (running)
-    {
-        SDL_Event event;
-        while (SDL_PollEvent(&event))
-        {
-            switch (event.type)
-            {
-            case SDL_QUIT:
-                running = false;
-                break;
-            case SDL_WINDOWEVENT:
-                switch (event.window.event)
-                {
-                case SDL_WINDOWEVENT_CLOSE:
-                    running = false;
-                    break;
-                }
-                break;
-
-            default:
-                break;
-            }
-        }
-
-        const Uint8* keys = SDL_GetKeyboardState(NULL);
-        Controller& controller1 = engine.getController1();
-        controller1.setButtonState(BUTTON_A, keys[SDL_SCANCODE_X]);
-        controller1.setButtonState(BUTTON_B, keys[SDL_SCANCODE_Z]);
-        controller1.setButtonState(BUTTON_SELECT, keys[SDL_SCANCODE_BACKSPACE]);
-        controller1.setButtonState(BUTTON_START, keys[SDL_SCANCODE_RETURN]);
-        controller1.setButtonState(BUTTON_UP, keys[SDL_SCANCODE_UP]);
-        controller1.setButtonState(BUTTON_DOWN, keys[SDL_SCANCODE_DOWN]);
-        controller1.setButtonState(BUTTON_LEFT, keys[SDL_SCANCODE_LEFT]);
-        controller1.setButtonState(BUTTON_RIGHT, keys[SDL_SCANCODE_RIGHT]);
-
-        if (keys[SDL_SCANCODE_R])
-        {
-            // Reset
-            engine.reset();
-        }
-        if (keys[SDL_SCANCODE_ESCAPE])
-        {
-            // quit
-            running = false;
-            break;
-        }
-        if (keys[SDL_SCANCODE_F])
-        {
-            SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
-        }
-
-        engine.update();
-        engine.render(renderBuffer);
-
-        SDL_UpdateTexture(texture, NULL, renderBuffer, sizeof(uint32_t) * RENDER_WIDTH);
-
-        SDL_RenderClear(renderer);
-
-        // Render the screen
-        SDL_RenderSetLogicalSize(renderer, RENDER_WIDTH, RENDER_HEIGHT);
-        SDL_RenderCopy(renderer, texture, NULL, NULL);
-
-        // Render scanlines
-        //
-        if (Configuration::getScanlinesEnabled())
-        {
-            SDL_RenderSetLogicalSize(renderer, RENDER_WIDTH * 3, RENDER_HEIGHT * 3);
-            SDL_RenderCopy(renderer, scanlineTexture, NULL, NULL);
-        }
-
-        SDL_RenderPresent(renderer);
-
-        /**
-         * Ensure that the framerate stays as close to the desired FPS as possible. If the frame was rendered faster, then delay. 
-         * If the frame was slower, reset time so that the game doesn't try to "catch up", going super-speed.
-         */
-        int now = SDL_GetTicks();
-        int delay = progStartTime + int(double(frame) * double(MS_PER_SEC) / double(Configuration::getFrameRate())) - now;
-        if(delay > 0) 
-        {
-            SDL_Delay(delay);
-        }
-        else 
-        {
-            frame = 0;
-            progStartTime = now;
-        }
-        frame++;
-    }
-}
-
-int main(int argc, char** argv)
-{
-    if (!initialize())
-    {
-        std::cout << "Failed to initialize. Please check previous error messages for more information. The program will now exit.\n";
-        return -1;
-    }
-
-    mainLoop();
-
-    shutdown();
-
     return 0;
 }
