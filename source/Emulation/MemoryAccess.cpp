@@ -11,6 +11,7 @@ MemoryAccess::MemoryAccess(uint8_t constant)
 {
     this->type = Constant;
     this->constantValue = constant;
+    // Fix: Pointer points to the member variable, not the stack parameter!
     this->value = &this->constantValue;
 }
 
@@ -111,6 +112,48 @@ MemoryAccess MemoryAccess::operator--(int)
     return result;
 }
 
+MemoryAccess& MemoryAccess::operator+=(uint8_t value)
+{
+    write(read() + value);
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator-=(uint8_t value)
+{
+    write(read() - value);
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator|=(uint8_t value)
+{
+    write(read() | value);
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator&=(uint8_t value)
+{
+    write(read() & value);
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator^=(uint8_t value)
+{
+    write(read() ^ value);
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator<<=(uint8_t value)
+{
+    write(read() << value);
+    return *this;
+}
+
+MemoryAccess& MemoryAccess::operator>>=(uint8_t value)
+{
+    write(read() >> value);
+    return *this;
+}
+
 uint8_t MemoryAccess::read()
 {
     if (type == Constant || (type == Read && value != nullptr))
@@ -134,4 +177,36 @@ void MemoryAccess::write(uint8_t value)
     {
         writeCallback(value);
     }
+}
+
+uint8_t MemoryAccess::asl()
+{
+    uint8_t val = read();
+    uint8_t result = val << 1;
+    write(result);
+    return (val & 0x80) >> 7;
+}
+
+uint8_t MemoryAccess::lsr()
+{
+    uint8_t val = read();
+    uint8_t result = val >> 1;
+    write(result);
+    return val & 0x01;
+}
+
+uint8_t MemoryAccess::rol(bool carry)
+{
+    uint8_t val = read();
+    uint8_t result = (val << 1) | (carry ? 1 : 0);
+    write(result);
+    return (val & 0x80) >> 7;
+}
+
+uint8_t MemoryAccess::ror(bool carry)
+{
+    uint8_t val = read();
+    uint8_t result = (val >> 1) | (carry ? 0x80 : 0);
+    write(result);
+    return val & 0x01;
 }
