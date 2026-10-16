@@ -1,7 +1,14 @@
 #ifndef SMB_HPP
 #define SMB_HPP
 
-#include <boost/utility/binary.hpp>
+// Modern toolchains no longer ship boost/utility/binary.hpp, but the generated
+// SMB constants still use BOOST_BINARY(...). Provide a minimal compatibility shim
+// so the project keeps compiling with C++14+ and binary literals.
+#ifndef BOOST_BINARY
+#define BOOST_BINARY(x) (0b##x)
+#endif
+
+#include <cstdint>
 
 #include "SMBConstants.hpp"
 #include "SMBEngine.hpp"
