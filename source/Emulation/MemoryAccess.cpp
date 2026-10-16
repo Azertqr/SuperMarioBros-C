@@ -1,142 +1,60 @@
-#include "../SMB/SMBEngine.hpp"
-
 #include "MemoryAccess.hpp"
 
-MemoryAccess::MemoryAccess(SMBEngine& engine, uint8_t* value) :
-    engine(engine)
-{
-    this->value = value;
+MemoryAccess::MemoryAccess() : type(None), pointer(nullptr), constValue(0) {}
+
+MemoryAccess::MemoryAccess(const MemoryAccess& other)
+    : type(other.type), constValue(other.constValue) {
+    if (type == Constant) {
+        pointer = &constValue;
+    } else {
+        pointer = other.pointer;
+    }
 }
 
-MemoryAccess::MemoryAccess(SMBEngine& engine, uint8_t constant) :
-    engine(engine)
-{
-    this->constant = constant;
-    this->value = &constant;
-}
-
-MemoryAccess& MemoryAccess::operator = (uint8_t value)
-{
-    *(this->value) = value;
-    engine.setZN(value);
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator = (const MemoryAccess& rhs)
-{
-    return ((*this) = *(rhs.value));
-}
-
-MemoryAccess& MemoryAccess::operator += (uint8_t value)
-{
-    uint16_t temp = *(this->value) + value + (engine.c ? 1 : 0);
-    *(this->value) = temp & 0xff;
-    engine.setZN(*(this->value));
-    engine.c = temp > 0xff;
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator -= (uint8_t value)
-{
-    uint16_t temp = *(this->value) - value - (engine.c ? 0 : 1);
-    *(this->value) = (temp & 0xff);
-    engine.setZN(*(this->value));
-    engine.c = temp < 0x100;
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator ++ ()
-{
-    *(this->value) = *(this->value) + 1;
-    engine.setZN(*(this->value));
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator -- ()
-{
-    *(this->value) = *(this->value) - 1;
-    engine.setZN(*(this->value));
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator ++ (int unused)
-{
-    return ++(*this);
-}
-
-MemoryAccess& MemoryAccess::operator -- (int unused)
-{
-    return --(*this);
-}
-
-MemoryAccess& MemoryAccess::operator &= (uint8_t value)
-{
-    *(this->value) &= value;
-    engine.setZN(*(this->value));
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator |= (uint8_t value)
-{
-    *(this->value) |= value;
-    engine.setZN(*(this->value));
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator ^= (uint8_t value)
-{
-    *(this->value) ^= value;
-    engine.setZN(*(this->value));
-    return *this;
-}
-
-MemoryAccess& MemoryAccess::operator <<= (int shift)
-{
-    for (int i = 0; i < shift; i++)
-    {
-        engine.c = *(this->value) & (1 << 7);
-        *(this->value) = (*(this->value) << 1) & 0xfe;
-        engine.setZN(*(this->value));
+MemoryAccess& MemoryAccess::operator=(const MemoryAccess& other) {
+    if (this != &other) {
+        type = other.type;
+        constValue = other.constValue;
+        if (type == Constant) {
+            pointer = &constValue;
+        } else {
+            pointer = other.pointer;
+        }
     }
     return *this;
 }
 
-MemoryAccess& MemoryAccess::operator >>= (int shift)
-{
-    for (int i = 0; i < shift; i++)
-    {
-        engine.c = *(this->value) & (1 << 0);
-        *(this->value) = (*(this->value) >> 1) & 0x7f;
-        engine.setZN(*(this->value));
-    }
-    return *this;
+MemoryAccess MemoryAccess::createConstant(uint8_t constant) {
+    MemoryAccess ma;
+    ma.type = Constant;
+    ma.constValue = constant;
+    ma.pointer = &ma.constValue;
+    return ma;
 }
 
-MemoryAccess::operator uint8_t()
-{
-    return *value;
+MemoryAccess MemoryAccess::createRead(uint8_t* ptr) {
+    MemoryAccess ma;
+    ma.type = Read;
+    ma.pointer = ptr;
+    return ma;
 }
 
-void MemoryAccess::rol()
-{
-    bool bit7 = *(this->value) & (1 << 7);
-    *(this->value) <<= 1;
-    if( engine.c )
-    {
-        *(this->value) |= (1 << 0);
-    }
-    engine.c = bit7;
-    engine.setZN(*(this->value));
+MemoryAccess MemoryAccess::createWrite(uint8_t* ptr) {
+    MemoryAccess ma;
+    ma.type = Write;
+    ma.pointer = ptr;
+    return ma;
 }
 
-void MemoryAccess::ror()
-{
-    bool bit0 = *(this->value) & (1 << 0);
-    *(this->value) >>= 1;
-    if( engine.c )
-    {
-        *(this->value) |= (1 << 7);
+uint8_t MemoryAccess::read() const {
+    if (pointer) {
+        return *pointer;
     }
-    engine.c = bit0;
-    engine.setZN(*(this->value));
+    return 0;
+}
+
+void MemoryAccess::write(uint8_t val) {
+    if (type == Write && pointer) {
+        *pointer = val;
+    }
 }
