@@ -90,6 +90,24 @@ static void mainLoopTick() {
         }
     }
 
+#ifdef __EMSCRIPTEN__
+    // Fixed 60 updates/s whatever the display refresh rate (iPad ProMotion = 120Hz
+    // would otherwise run the game at double speed / feel laggy).
+    {
+        static double lastMs = 0.0;
+        static double accMs = 0.0;
+        const double stepMs = 1000.0 / 60.0;
+        double nowMs = emscripten_get_now();
+        if (lastMs == 0.0) lastMs = nowMs;
+        accMs += nowMs - lastMs;
+        lastMs = nowMs;
+        if (accMs > 100.0) accMs = 100.0;
+        if (accMs < stepMs * 0.85) return;
+        accMs -= stepMs;
+        if (accMs > stepMs) accMs = stepMs;
+    }
+#endif
+
     if (!g_romLoaded || !g_smbEngine) {
         SDL_SetRenderDrawColor(g_renderer, 12, 12, 18, 255);
         SDL_RenderClear(g_renderer);
