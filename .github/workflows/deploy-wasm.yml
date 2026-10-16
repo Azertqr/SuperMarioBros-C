@@ -1,0 +1,69 @@
+# File: .github/workflows/deploy-wasm.yml
+name: Build SuperMarioBros-C WASM & Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Emscripten SDK
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.56
+
+      - name: Fix SDL2 include paths across codebase
+        run: |
+          sed -i 's|#include <SDL.h>|#include <SDL2/SDL.h>|g' source/Main.cpp source/Emulation/APU.cpp source/Util/Video.hpp || true
+          sed -i 's|#include "SDL.h"|#include <SDL2/SDL.h>|g' source/Main.cpp source/Emulation/APU.cpp source/Util/Video.hpp || true
+
+      - name: Compile C++ to WebAssembly (smbc.js + smbc.wasm)
+        run: |
+          mkdir -p web
+          em++ -O3 -std=c++14 -Isource \
+            source/Configuration.cpp \
+            source/Main.cpp \
+            source/Emulation/APU.cpp \
+            source/Emulation/Controller.cpp \
+            source/Emulation/MemoryAccess.cpp \
+            source/Emulation/PPU.cpp \
+            source/SMB/SMB.cpp \
+            source/SMB/SMBData.cpp \
+            source/SMB/SMBEngine.cpp \
+            source/Util/Video.cpp \
+            -sUSE_SDL=2 \
+            -sALLOW_MEMORY_GROWTH=1 \
+            -sFORCE_FILESYSTEM=1 \
+            -sEXPORTED_FUNCTIONS="['_main','_startGameWithRom','_setTouchButton','_resetGame']" \
+            -sEXPORTED_RUNTIME_METHODS="['ccall','cwrap','FS']" \
+            -o web/smbc.js
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload WebAssembly artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './web'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
