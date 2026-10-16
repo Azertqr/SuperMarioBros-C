@@ -3,53 +3,31 @@
 
 #include <cstdint>
 
-class SMBEngine;
-
-/**
- * Wraps operations to memory values/registers so that status flags can be set for branch operations.
- */
-class MemoryAccess
-{
+class MemoryAccess {
 public:
-    /**
-     * Construct a MemoryAccess to a location.
-     */
-    MemoryAccess(SMBEngine& engine, uint8_t* value);
+    enum Type {
+        None,
+        Read,
+        Write,
+        Constant
+    };
 
-    /**
-     * Construct a MemoryAccess to a constant value.
-     */
-    MemoryAccess(SMBEngine& engine, uint8_t constant);
+    MemoryAccess();
+    MemoryAccess(const MemoryAccess& other);
+    MemoryAccess& operator=(const MemoryAccess& other);
 
-    MemoryAccess& operator = (uint8_t value);
-    MemoryAccess& operator = (const MemoryAccess& rhs);
-    MemoryAccess& operator += (uint8_t value);
-    MemoryAccess& operator -= (uint8_t value);
-    MemoryAccess& operator ++ ();
-    MemoryAccess& operator -- ();
-    MemoryAccess& operator ++ (int unused);
-    MemoryAccess& operator -- (int unused);
-    MemoryAccess& operator &= (uint8_t value);
-    MemoryAccess& operator |= (uint8_t value);
-    MemoryAccess& operator ^= (uint8_t value);
-    MemoryAccess& operator <<= (int shift);
-    MemoryAccess& operator >>= (int shift);
-    operator uint8_t();
+    static MemoryAccess createConstant(uint8_t constant);
+    static MemoryAccess createRead(uint8_t* ptr);
+    static MemoryAccess createWrite(uint8_t* ptr);
 
-    /**
-     * Circular left bit rotation.
-     */
-    void rol();
-
-    /**
-     * Circular right bit rotation.
-     */
-    void ror();
+    uint8_t read() const;
+    void write(uint8_t val);
+    Type getType() const { return type; }
 
 private:
-    SMBEngine& engine;
-    uint8_t* value;
-    uint8_t constant;
+    Type type;
+    uint8_t* pointer;
+    uint8_t constValue;
 };
 
 #endif // MEMORYACCESS_HPP
